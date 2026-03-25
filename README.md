@@ -33,4 +33,3 @@ An automated Python tool that scrapes **MyAnimeList** seasonal pages, filters ou
 * **Test Users:** Ensure you have added your email address as a "Test User" in the OAuth Consent Screen settings on Google Cloud.
 
 ---
-*Created in collaboration with Gemini.*
