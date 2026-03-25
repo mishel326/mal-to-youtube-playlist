@@ -22,7 +22,7 @@ An automated Python tool that scrapes **MyAnimeList** seasonal pages, filters ou
 1.  Ensure `client_secrets.json` is in the same directory as the script.
 2.  Run the script:
     ```bash
-    python mal_to_yt.py
+    python mal_season_playlist_open_youtube.py
     ```
 3.  A browser window will open asking for permission to manage your YouTube account. Log in and authorize the app.
 4.  Wait for the script to finish. It will print a summary and open your new playlist.
