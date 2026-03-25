@@ -74,15 +74,15 @@ def fetch_html(url: str) -> str:
 
 def extract_valid_entries(html: str):
     valid_entries = []
-    # חלוקה לפי קטגוריות MAL
+    # Division by MAL categories
     categories = re.findall(r'class="anime-header">(.*?)</div>(.*?)(?=<div class="anime-header"|$)', html, re.S)
     
     for _, cat_content in categories:
-        # חילוץ בלוקים של אנימה
+        # Extracting anime blocks
         full_cards = re.findall(r'(<div[^>]+class="[^"]*seasonal-anime[^"]*".*?)(?=<div[^>]+class="[^"]*seasonal-anime[^"]*"|(?<=</div>)\s*</div>\s*</div>|$)', cat_content, re.S)
         
         for block in full_cards:
-            # סינון
+            # Filter
             if any(re.search(rf'\b{word}\b', block, re.I) for word in EXCLUDED_WORDS):
                 stats["skipped_by_filter"] += 1
                 continue
@@ -115,14 +115,14 @@ def main():
     final_video_ids = []
     for entry in entries:
         v_id = None
-        # שלב 1: ניסיון מתוך MAL
+        # Step 1: Extract from MAL
         try:
             p_html = fetch_html(entry.video_page_url or entry.anime_url)
             m = re.search(r"youtube\.com/(?:embed/|watch\?v=)([A-Za-z0-9_-]{11})", p_html)
             if m: v_id = m.group(1)
         except: pass
 
-        # שלב 2: חיפוש ביוטיוב אם נכשל
+        # Step 2: Search YouTube if failed
         if not v_id:
             v_id = search_youtube_trailer(youtube, entry.title)
         
