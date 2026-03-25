@@ -1,0 +1,17 @@
+# Google API Credentials (סופר חשוב!)
+client_secrets.json
+token.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
