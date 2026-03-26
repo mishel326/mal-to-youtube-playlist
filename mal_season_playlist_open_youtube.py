@@ -7,8 +7,6 @@ import os
 from dataclasses import dataclass
 from datetime import date
 from urllib.request import Request, urlopen
-
-# Google API Libraries
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
 import googleapiclient.errors
@@ -18,21 +16,15 @@ BASE_URL = "https://myanimelist.net"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/123.0.0.0 Safari/537.36"
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 
-# Quota costs (Units)
+# Quota costs
 COST_SEARCH = 100
 COST_CREATE_PLAYLIST = 50
 COST_ADD_ITEM = 50
+MAX_QUOTA = 9800 # Margin of safety
 
-# Blacklist words
 EXCLUDED_WORDS = ["Erotica", "Hentai", "Kids"]
 
-# Session Stats
-stats = {
-    "quota_used": 0,
-    "items_added": 0,
-    "searches_made": 0,
-    "skipped_by_filter": 0
-}
+stats = {"quota_used": 0, "items_added": 0, "searches_made": 0, "skipped_by_filter": 0, "mal_links_found": 0}
 
 @dataclass
 class AnimeEntry:
@@ -40,32 +32,32 @@ class AnimeEntry:
     anime_url: str
     video_page_url: str | None = None
 
-# --- YouTube API Core ---
-
 def update_quota(amount):
     stats["quota_used"] += amount
+    if stats["quota_used"] > MAX_QUOTA:
+        print("\n⚠️ Quota Limit Imminent! Stopping to save progress...")
+        return False
+    return True
 
 def get_youtube_client():
     client_secrets_file = "client_secrets.json"
-    if not os.path.exists(client_secrets_file):
-        print(f"Error: {client_secrets_file} not found!")
-        return None
+    if not os.path.exists(client_secrets_file): return None
     flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(client_secrets_file, SCOPES)
     credentials = flow.run_local_server(port=0)
     return googleapiclient.discovery.build("youtube", "v3", credentials=credentials)
 
 def search_youtube_trailer(youtube, anime_title):
+    if not update_quota(COST_SEARCH): return None
     try:
-        update_quota(COST_SEARCH)
         stats["searches_made"] += 1
         print(f"  [Search] {anime_title}...")
         res = youtube.search().list(q=f"{anime_title} Official Trailer", part="id", maxResults=1, type="video").execute()
+        time.sleep(1) # Safety delay
         if res.get("items"):
             return res["items"][0]["id"]["videoId"]
-    except Exception: pass
+    except Exception as e:
+        print(f"  Error searching: {e}")
     return None
-
-# --- Scraper Logic ---
 
 def fetch_html(url: str) -> str:
     req = Request(url, headers={"User-Agent": USER_AGENT})
@@ -74,56 +66,47 @@ def fetch_html(url: str) -> str:
 
 def extract_valid_entries(html: str):
     valid_entries = []
-    # Division by MAL categories
+    # Logic from our successful dry run
     categories = re.findall(r'class="anime-header">(.*?)</div>(.*?)(?=<div class="anime-header"|$)', html, re.S)
-    
     for _, cat_content in categories:
-        # Extracting anime blocks
         full_cards = re.findall(r'(<div[^>]+class="[^"]*seasonal-anime[^"]*".*?)(?=<div[^>]+class="[^"]*seasonal-anime[^"]*"|(?<=</div>)\s*</div>\s*</div>|$)', cat_content, re.S)
-        
         for block in full_cards:
-            # Filter
             if any(re.search(rf'\b{word}\b', block, re.I) for word in EXCLUDED_WORDS):
                 stats["skipped_by_filter"] += 1
                 continue
-            
             title_match = re.search(r'link-title">(.*?)</a>', block)
             url_match = re.search(r'href="(https://myanimelist.net/anime/\d+/[^"]+)"', block)
             video_match = re.search(r'href="(https://myanimelist.net/anime/\d+/[^"]+/video[^"]*)"', block)
-            
             if title_match and url_match:
                 title = title_match.group(1).strip()
                 if not any(e.title == title for e in valid_entries):
-                    valid_entries.append(AnimeEntry(
-                        title=title,
-                        anime_url=url_match.group(1).split('?')[0],
-                        video_page_url=video_match.group(1) if video_match else None
-                    ))
+                    valid_entries.append(AnimeEntry(title=title, anime_url=url_match.group(1).split('?')[0], video_page_url=video_match.group(1) if video_match else None))
     return valid_entries
-
-# --- Execution ---
 
 def main():
     youtube = get_youtube_client()
     if not youtube: return
 
-    print("Fetching and filtering MAL data...")
+    print("Fetching MAL data...")
     html = fetch_html(f"{BASE_URL}/anime/season")
     entries = extract_valid_entries(html)
-    print(f"Ready to process {len(entries)} items (Skipped {stats['skipped_by_filter']}).")
+    print(f"Found {len(entries)} items. Checking MAL for links first...")
 
     final_video_ids = []
     for entry in entries:
         v_id = None
-        # Step 1: Extract from MAL
+        # Try finding in MAL page (Free)
         try:
             p_html = fetch_html(entry.video_page_url or entry.anime_url)
-            m = re.search(r"youtube\.com/(?:embed/|watch\?v=)([A-Za-z0-9_-]{11})", p_html)
-            if m: v_id = m.group(1)
+            # Improved regex for YT IDs
+            m = re.search(r'(?:v=|/embed/|youtu\.be/)([A-Za-z0-9_-]{11})', p_html)
+            if m: 
+                v_id = m.group(1)
+                stats["mal_links_found"] += 1
         except: pass
 
-        # Step 2: Search YouTube if failed
-        if not v_id:
+        # Only Search if MAL failed AND we have quota
+        if not v_id and stats["quota_used"] < MAX_QUOTA - 500:
             v_id = search_youtube_trailer(youtube, entry.title)
         
         if v_id: final_video_ids.append(v_id)
@@ -135,24 +118,22 @@ def main():
             "status": {"privacyStatus": "private"}
         }).execute()["id"]
         
-        print(f"Adding {len(final_video_ids)} videos to playlist...")
+        print(f"Adding videos. (Progress: {len(final_video_ids)} found)...")
         for vid in list(dict.fromkeys(final_video_ids)):
+            if not update_quota(COST_ADD_ITEM): break
             try:
-                update_quota(COST_ADD_ITEM)
                 youtube.playlistItems().insert(part="snippet", body={
                     "snippet": {"playlistId": pl_id, "resourceId": {"kind": "youtube#video", "videoId": vid}}
                 }).execute()
                 stats["items_added"] += 1
                 time.sleep(0.5)
-            except googleapiclient.errors.HttpError as e:
-                if e.resp.status == 403:
-                    print("\n[!] Limit reached.")
-                    break
+            except: break
 
         print("\n" + "="*35)
-        print(f"✅ Success! Added {stats['items_added']} trailers.")
-        print(f"📉 Filtered out: {stats['skipped_by_filter']} items.")
-        print(f"💰 Quota used: {stats['quota_used']} units.")
+        print(f"✅ Summary: Added {stats['items_added']} videos.")
+        print(f"🔗 Found in MAL: {stats['mal_links_found']} (Saved Quota!)")
+        print(f"🔍 YouTube Searches: {stats['searches_made']}")
+        print(f"💰 Quota Used: {stats['quota_used']} / 10000")
         print("="*35)
         webbrowser.open(f"https://www.youtube.com/playlist?list={pl_id}")
 
